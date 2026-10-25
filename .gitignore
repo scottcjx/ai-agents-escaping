@@ -1,0 +1,10 @@
+# Generated each run by the publisher (holds live paste/GitLab URLs)
+docker/.env
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Harness / editor
+.claude/scheduled_tasks.lock
+.DS_Store

@@ -1,0 +1,46 @@
+name: sandbox-escape-demo
+
+services:
+  # The artifactory proxy. On BOTH networks: it can reach the agent (internal)
+  # and the internet (egress). It enforces the egress allow-list.
+  proxy:
+    build:
+      context: .
+      dockerfile: proxy/Dockerfile
+    environment:
+      - SAFE=${SAFE:-0}
+    networks:
+      - internal
+      - egress
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=3)"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # The agent. On the INTERNAL network ONLY -> no internet. Its one way out is
+  # the proxy.
+  agent:
+    build:
+      context: .
+      dockerfile: agent/Dockerfile
+    depends_on:
+      proxy:
+        condition: service_healthy
+    environment:
+      - PROXY=http://proxy:8080
+      - DOC_URL=${DOC_URL}
+      - KEY_URL=${KEY_URL}
+      - EXPECTED_SHA256=${EXPECTED_SHA256}
+      - KEY_STATE=${KEY_STATE:-public}
+    networks:
+      - internal
+
+networks:
+  # No NAT to the outside. Containers here cannot reach the internet.
+  internal:
+    internal: true
+  # Ordinary bridge with internet access. Only the proxy joins it.
+  egress:
+    driver: bridge

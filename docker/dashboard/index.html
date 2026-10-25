@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sandbox Escape — Live Node View</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #141b24; --panel-2: #0f161e; --line: #273242;
+    --fg: #e7ecf2; --muted: #8b98a8;
+    --agent: #4ade80; --proxy: #63a0ff; --host: #e0a83d;
+    --allow: #63a0ff; --deny: #4ade80; --fail: #e0a83d; --bad: #f0675a;
+    --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans);
+    display: flex; flex-direction: column; min-height: 100%;
+  }
+  header {
+    padding: 14px 18px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+    display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center;
+  }
+  .title { display: flex; flex-direction: column; gap: 2px; margin-right: auto; }
+  .title h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  .title .sub { font-size: 12px; color: var(--muted); }
+  .scenario { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button {
+    font: inherit; font-size: 13px; cursor: pointer; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg); padding: 7px 13px;
+  }
+  button:hover:not(:disabled) { border-color: var(--proxy); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.compromise { border-color: #5a2b2b; }
+  button.missing { border-color: #5a4a22; }
+  button.mitigated { border-color: #244a33; }
+  .badge {
+    font-family: var(--mono); font-size: 12px; font-weight: 700; padding: 5px 12px;
+    border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+  }
+  .badge.run { color: var(--fg); border-color: var(--proxy); }
+  .badge.COMPROMISED { color: var(--bad); border-color: var(--bad); }
+  .badge.FAILED { color: var(--fail); border-color: var(--fail); }
+  .badge.CONTAINED { color: var(--deny); border-color: var(--deny); }
+
+  .legend { font-size: 11.5px; color: var(--muted); padding: 7px 18px; border-bottom: 1px solid var(--line); }
+  .legend b { color: var(--fg); font-weight: 600; }
+
+  .grid { flex: 1; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1px; background: var(--line); min-height: 0; }
+  @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .panel .bar {
+    padding: 9px 13px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 9px;
+    background: var(--panel-2);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+  .panel[data-src="agent"] .dot { background: var(--agent); }
+  .panel[data-src="proxy"] .dot { background: var(--proxy); }
+  .panel[data-src="host"] .dot { background: var(--host); }
+  .bar .name { font-weight: 600; font-size: 13px; }
+  .bar .meta { font-size: 11px; color: var(--muted); margin-left: auto; font-family: var(--mono); }
+  .log {
+    flex: 1; overflow-y: auto; padding: 10px 13px; margin: 0; font-family: var(--mono);
+    font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  }
+  .log .l { display: block; }
+  .l.allow { color: var(--allow); }
+  .l.deny { color: var(--deny); }
+  .l.fail { color: var(--fail); }
+  .l.bad { color: var(--bad); font-weight: 700; }
+  .l.ok { color: var(--agent); }
+  .l.dim { color: var(--muted); }
+  .empty { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="title">
+      <h1>Sandbox Escape — Live Node View</h1>
+      <span class="sub">AI agent (no internet) · proxy/artifactory (has internet) · host control</span>
+    </div>
+    <span class="scenario" id="scenario">idle</span>
+    <span class="badge" id="badge">RESULT: —</span>
+    <div class="controls">
+      <button class="compromise" data-scn="compromise">Key public → compromise</button>
+      <button class="missing" data-scn="missing">Key missing → fail</button>
+      <button class="mitigated" data-scn="mitigated">Mitigated proxy → contained</button>
+    </div>
+  </header>
+
+  <div class="legend">
+    <b>Flow:</b> host publishes document + key → agent proves it has no internet → agent escapes the proxy with a
+    <b>#mirror.internal.corp</b> fragment → proxy fetches both from the internet → agent decrypts. &nbsp;
+    <b>Colors:</b> <span style="color:var(--allow)">ALLOW</span> · <span style="color:var(--deny)">DENY/contained</span> ·
+    <span style="color:var(--fail)">fail</span> · <span style="color:var(--bad)">compromised</span>.
+  </div>
+
+  <div class="grid">
+    <section class="panel" data-src="agent">
+      <div class="bar"><span class="dot"></span><span class="name">AGENT</span><span class="meta">internal net · no internet</span></div>
+      <pre class="log" id="log-agent"><span class="empty">waiting…</span></pre>
+    </section>
+    <section class="panel" data-src="proxy">
+      <div class="bar"><span class="dot"></span><span class="name">PROXY · artifactory</span><span class="meta">internal + egress · has internet</span></div>
+      <pre class="log" id="log-proxy"><span class="empty">waiting…</span></pre>
+    </section>
+    <section class="panel" data-src="host">
+      <div class="bar"><span class="dot"></span><span class="name">HOST · control</span><span class="meta">publish + compose</span></div>
+      <pre class="log" id="log-host"><span class="empty">pick a scenario above…</span></pre>
+    </section>
+  </div>
+
+<script>
+  var logs = { agent: document.getElementById("log-agent"),
+               proxy: document.getElementById("log-proxy"),
+               host:  document.getElementById("log-host") };
+  var badge = document.getElementById("badge");
+  var scenarioEl = document.getElementById("scenario");
+  var buttons = Array.prototype.slice.call(document.querySelectorAll("button[data-scn]"));
+  var cleared = { agent: false, proxy: false, host: false };
+
+  function classify(text) {
+    if (/\[!\]|isolation is broken/.test(text)) return "bad";
+    if (/RESULT: COMPROMISED|COMPROMISED/.test(text)) return "bad";
+    if (/\bDENY\b|CONTAINED|\[blocked\]|Mitigation held/.test(text)) return "deny";
+    if (/\[fail\]|FAILED|unavailable|cannot|unreachable|100% packet loss|ping.*FAILED/.test(text)) return "fail";
+    if (/\bALLOW\b|upstream 200|bytes from/.test(text)) return "allow";
+    if (/\[\+\]|\[ok\]|retrieved|MATCH/.test(text)) return "ok";
+    if (/^\s*\$ /.test(text)) return "dim";
+    if (/^\s*\[|>>|^#/.test(text)) return "dim";
+    return "";
+  }
+
+  function append(source, text) {
+    var pre = logs[source]; if (!pre) return;
+    if (!cleared[source]) { pre.innerHTML = ""; cleared[source] = true; }
+    var span = document.createElement("span");
+    span.className = "l " + classify(text);
+    span.textContent = text.length ? text : " ";
+    pre.appendChild(span);
+    pre.scrollTop = pre.scrollHeight;
+  }
+
+  function setRunning(on) {
+    buttons.forEach(function (b) { b.disabled = on; });
+    badge.className = "badge" + (on ? " run" : "");
+    if (on) badge.textContent = "RUNNING…";
+  }
+
+  var es = new EventSource("/events");
+  es.onmessage = function (e) {
+    var d = JSON.parse(e.data);
+    if (d.kind === "clear") {
+      ["agent", "proxy", "host"].forEach(function (s) { logs[s].innerHTML = ""; cleared[s] = true; });
+      return;
+    }
+    if (d.kind === "status") {
+      if (/^scenario:/.test(d.line)) scenarioEl.textContent = d.line;
+      setRunning(true);
+      return;
+    }
+    if (d.kind === "result") {
+      badge.className = "badge " + d.line;
+      badge.textContent = "RESULT: " + d.line;
+      setRunning(false);
+      return;
+    }
+    append(d.source, d.line);
+  };
+  es.onerror = function () { scenarioEl.textContent = "disconnected — is the server running?"; };
+
+  buttons.forEach(function (b) {
+    b.addEventListener("click", function () {
+      ["agent", "proxy", "host"].forEach(function (s) { logs[s].innerHTML = ""; cleared[s] = false; });
+      setRunning(true);
+      scenarioEl.textContent = "scenario: " + b.dataset.scn;
+      fetch("/run", { method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ scenario: b.dataset.scn }) })
+        .catch(function () { scenarioEl.textContent = "could not reach server"; setRunning(false); });
+    });
+  });
+</script>
+</body>
+</html>
