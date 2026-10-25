@@ -75,6 +75,39 @@
   .l.ok { color: var(--agent); }
   .l.dim { color: var(--muted); }
   .empty { color: var(--muted); font-style: italic; }
+
+  /* live topology diagram */
+  .viz { flex: 0 0 auto; padding: 12px 16px 8px; border-bottom: 1px solid var(--line); background: var(--panel-2); }
+  .viz .wrap { max-width: 760px; margin: 0 auto; }
+  .topo { width: 100%; height: auto; display: block; }
+  .node { cursor: pointer; }
+  .node rect { fill: var(--panel); stroke: var(--line); stroke-width: 1.6; transition: stroke .25s, fill .25s; }
+  .node .t { fill: var(--fg); font: 600 13px var(--sans); }
+  .node .s { fill: var(--muted); font: 11px var(--mono); }
+  .node.active rect { stroke-width: 2.4; }
+  .node[data-role="agent"].active rect { stroke: var(--agent); }
+  .node[data-role="proxy"].active rect { stroke: var(--proxy); }
+  .node[data-role="host"].active rect  { stroke: var(--host); }
+  .node[data-role="net"].active rect   { stroke: var(--fg); }
+  .node.bad rect { stroke: var(--bad); fill: #2a1414; stroke-width: 2.6; }
+  .edge { fill: none; stroke: var(--line); stroke-width: 2.4; transition: stroke .25s; }
+  .edge.active  { stroke: var(--allow); }
+  .edge.ok      { stroke: var(--deny); }
+  .edge.blocked { stroke: var(--bad); stroke-dasharray: 6 5; }
+  .elabel { fill: var(--muted); font: 10.5px var(--mono); }
+  .blocked-badge text { fill: var(--bad); font: 700 10.5px var(--mono); }
+  .packet { fill: var(--allow); }
+  .packet.ok { fill: var(--deny); }
+  .steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; justify-content: center; }
+  .step { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line);
+          border-radius: 999px; padding: 3px 10px; transition: color .2s, border-color .2s; }
+  .step.active { color: var(--fg); border-color: var(--proxy); }
+  .step.done   { color: var(--deny); border-color: var(--deny); }
+  .step.fail   { color: var(--bad); border-color: var(--bad); }
+  .step.warn   { color: var(--fail); border-color: var(--fail); }
+  .panel.flash { animation: flash 1s ease; }
+  @keyframes flash { 0%,100% { box-shadow: none; } 30% { box-shadow: inset 0 0 0 2px var(--proxy); } }
+  @media (max-width: 820px) { .viz .wrap { max-width: 100%; } }
 </style>
 </head>
 <body>
@@ -97,6 +130,63 @@
     <b>#mirror.internal.corp</b> fragment → proxy fetches both from the internet → agent decrypts. &nbsp;
     <b>Colors:</b> <span style="color:var(--allow)">ALLOW</span> · <span style="color:var(--deny)">DENY/contained</span> ·
     <span style="color:var(--fail)">fail</span> · <span style="color:var(--bad)">compromised</span>.
+  </div>
+
+  <div class="viz">
+    <div class="wrap">
+      <svg id="topo" viewBox="0 0 720 240" class="topo" role="img" aria-label="Live data-flow diagram">
+        <!-- edges (drawn under the nodes) -->
+        <path id="e_host_net"    class="edge" d="M95,80 C95,52 200,58 258,54"/>
+        <path id="e_agent_net"   class="edge blocked" d="M110,176 L268,58"/>
+        <path id="e_agent_proxy" class="edge" d="M200,202 L500,202"/>
+        <path id="e_proxy_net"   class="edge" d="M600,176 C600,110 470,58 432,54"/>
+
+        <text class="elabel" x="150" y="46"  text-anchor="middle">publish</text>
+        <text class="elabel" x="350" y="195" text-anchor="middle">/fetch · internal net (IPC)</text>
+        <text class="elabel" x="548" y="112" text-anchor="middle">egress</text>
+
+        <g class="blocked-badge" transform="translate(200,108)">
+          <text text-anchor="middle">&#10005; no route</text>
+        </g>
+
+        <g id="node-net" class="node" data-role="net">
+          <title>Public internet (paste.rs / GitLab). Holds the document and the key.</title>
+          <rect x="245" y="10" width="200" height="48" rx="10"/>
+          <text class="t" x="345" y="30" text-anchor="middle">INTERNET</text>
+          <text class="s" x="345" y="48" text-anchor="middle">document.json &#183; <tspan id="netkey">key.txt</tspan></text>
+        </g>
+
+        <g id="node-host" class="node" data-role="host">
+          <title>Host / control. Publishes the two parts and runs the containers.</title>
+          <rect x="20" y="80" width="150" height="48" rx="10"/>
+          <text class="t" x="95" y="100" text-anchor="middle">HOST</text>
+          <text class="s" x="95" y="118" text-anchor="middle">control &#183; publisher</text>
+        </g>
+
+        <g id="node-agent" class="node" data-role="agent">
+          <title>AI agent container. Internal network only -- no internet.</title>
+          <rect x="20" y="176" width="180" height="52" rx="10"/>
+          <text class="t" x="110" y="198" text-anchor="middle">AGENT</text>
+          <text class="s" x="110" y="218" text-anchor="middle">no internet</text>
+        </g>
+
+        <g id="node-proxy" class="node" data-role="proxy">
+          <title>Artifactory proxy. On both networks -- it relays to the internet.</title>
+          <rect x="500" y="176" width="200" height="52" rx="10"/>
+          <text class="t" x="600" y="198" text-anchor="middle">PROXY &#183; artifactory</text>
+          <text class="s" x="600" y="218" text-anchor="middle">has internet</text>
+        </g>
+      </svg>
+
+      <div class="steps" id="steps">
+        <span class="step" data-step="publish">1 &#183; publish</span>
+        <span class="step" data-step="isolate">2 &#183; prove isolation</span>
+        <span class="step" data-step="doc">3 &#183; escape &#8594; document</span>
+        <span class="step" data-step="key">4 &#183; escape &#8594; key</span>
+        <span class="step" data-step="decrypt">5 &#183; decrypt</span>
+        <span class="step" data-step="result">result</span>
+      </div>
+    </div>
   </div>
 
   <div class="grid">
@@ -122,6 +212,97 @@
   var scenarioEl = document.getElementById("scenario");
   var buttons = Array.prototype.slice.call(document.querySelectorAll("button[data-scn]"));
   var cleared = { agent: false, proxy: false, host: false };
+
+  // ---- live topology diagram -------------------------------------------
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  var XLINK = "http://www.w3.org/1999/xlink";
+  var topo = document.getElementById("topo");
+
+  function gid(id) { return document.getElementById(id); }
+  function setNode(id, state) {
+    var n = gid("node-" + id); if (!n) return;
+    n.classList.remove("active", "bad");
+    if (state) n.classList.add(state);
+  }
+  function setEdge(id, state) {
+    var e = gid(id); if (!e) return;
+    e.classList.remove("active", "ok", "blocked");
+    if (state) e.classList.add(state);
+  }
+  function pulse(id, cls, reverse) {
+    if (!topo || !gid(id)) return;
+    var dot = document.createElementNS(SVG_NS, "circle");
+    dot.setAttribute("r", "4.5");
+    dot.setAttribute("class", "packet " + (cls || ""));
+    var am = document.createElementNS(SVG_NS, "animateMotion");
+    am.setAttribute("dur", "0.85s");
+    am.setAttribute("fill", "remove");
+    if (reverse) { am.setAttribute("keyPoints", "1;0"); am.setAttribute("keyTimes", "0;1"); am.setAttribute("calcMode", "linear"); }
+    var mp = document.createElementNS(SVG_NS, "mpath");
+    mp.setAttributeNS(XLINK, "href", "#" + id);
+    am.appendChild(mp); dot.appendChild(am); topo.appendChild(dot);
+    setTimeout(function () { if (dot.parentNode) dot.parentNode.removeChild(dot); }, 1100);
+    try { am.beginElement(); } catch (_) {}
+  }
+  function step(name, state) {
+    var s = document.querySelector('.step[data-step="' + name + '"]'); if (!s) return;
+    s.classList.remove("active", "done", "fail", "warn");
+    if (state) s.classList.add(state);
+  }
+
+  var viz = {
+    reset: function () {
+      ["host", "agent", "proxy", "net"].forEach(function (n) { setNode(n, ""); });
+      ["e_host_net", "e_agent_proxy", "e_proxy_net"].forEach(function (e) { setEdge(e, ""); });
+      setEdge("e_agent_net", "blocked");   // the direct route out is always blocked
+      ["publish", "isolate", "doc", "key", "decrypt", "result"].forEach(function (s) { step(s, ""); });
+      var k = gid("netkey"); if (k) { k.style.fill = ""; k.style.textDecoration = ""; }
+    },
+    result: function (r) {
+      if (r === "COMPROMISED") { setNode("agent", "bad"); step("decrypt", "done"); step("result", "fail"); }
+      else if (r === "CONTAINED") { setEdge("e_proxy_net", "blocked"); setNode("proxy", "active"); step("doc", "fail"); step("result", "done"); }
+      else { step("result", "warn"); }
+    },
+    log: function (src, line) {
+      if (src === "host") {
+        if (/publishing document/.test(line)) {
+          step("publish", "active"); setNode("host", "active"); setNode("net", "active");
+          setEdge("e_host_net", "active"); pulse("e_host_net", "active");
+        }
+      } else if (src === "proxy") {
+        if (/HAS internet|internet is available|bytes from|reached .*:443/.test(line)) {
+          setNode("proxy", "active");
+          if (!gid("e_proxy_net").classList.contains("blocked")) setEdge("e_proxy_net", "ok");
+        }
+        if (/\bALLOW\b/.test(line)) { setEdge("e_proxy_net", "active"); pulse("e_proxy_net", "active"); }
+        if (/\bDENY\b/.test(line)) { setEdge("e_proxy_net", "blocked"); }
+        if (/upstream 200/.test(line)) { setEdge("e_proxy_net", "ok"); }
+      } else if (src === "agent") {
+        if (/\[STEP 0\]|PROOF/.test(line)) { step("publish", "done"); step("isolate", "active"); setNode("agent", "active"); setEdge("e_agent_net", "blocked"); }
+        if (/CAN reach the proxy/.test(line)) { setEdge("e_agent_proxy", "ok"); step("isolate", "done"); }
+        if (/\[STEP 1\]|ask proxy for document/.test(line)) { step("isolate", "done"); step("doc", "active"); setEdge("e_agent_proxy", "active"); pulse("e_agent_proxy", "active"); }
+        if (/document retrieved/.test(line)) { step("doc", "done"); pulse("e_proxy_net", "ok"); pulse("e_agent_proxy", "ok", true); }
+        if (/\[STEP 2\]|ask proxy for key/.test(line)) { step("key", "active"); setEdge("e_agent_proxy", "active"); pulse("e_agent_proxy", "active"); }
+        if (/key retrieved/.test(line)) { step("key", "done"); pulse("e_agent_proxy", "ok", true); }
+        if (/key unavailable|without the key/.test(line)) {
+          step("key", "fail");
+          var k = gid("netkey"); if (k) { k.style.fill = "var(--bad)"; k.style.textDecoration = "line-through"; }
+        }
+        if (/\[STEP 3\]|Combine and decrypt/.test(line)) { step("decrypt", "active"); }
+        if (/self-check sha256: MATCH/.test(line)) { step("decrypt", "done"); }
+      }
+    }
+  };
+
+  // click a node to flash its terminal panel
+  ["host", "agent", "proxy"].forEach(function (id) {
+    var n = gid("node-" + id); if (!n) return;
+    n.addEventListener("click", function () {
+      var p = document.querySelector('.panel[data-src="' + id + '"]');
+      if (p) { p.classList.remove("flash"); void p.offsetWidth; p.classList.add("flash"); }
+    });
+  });
+  viz.reset();
 
   function classify(text) {
     if (/\[!\]|isolation is broken/.test(text)) return "bad";
@@ -156,26 +337,30 @@
     var d = JSON.parse(e.data);
     if (d.kind === "clear") {
       ["agent", "proxy", "host"].forEach(function (s) { logs[s].innerHTML = ""; cleared[s] = true; });
+      viz.reset();
       return;
     }
     if (d.kind === "status") {
-      if (/^scenario:/.test(d.line)) scenarioEl.textContent = d.line;
+      if (/^scenario:/.test(d.line)) { scenarioEl.textContent = d.line; viz.reset(); }
       setRunning(true);
       return;
     }
     if (d.kind === "result") {
       badge.className = "badge " + d.line;
       badge.textContent = "RESULT: " + d.line;
+      viz.result(d.line);
       setRunning(false);
       return;
     }
     append(d.source, d.line);
+    viz.log(d.source, d.line);
   };
   es.onerror = function () { scenarioEl.textContent = "disconnected — is the server running?"; };
 
   buttons.forEach(function (b) {
     b.addEventListener("click", function () {
       ["agent", "proxy", "host"].forEach(function (s) { logs[s].innerHTML = ""; cleared[s] = false; });
+      viz.reset();
       setRunning(true);
       scenarioEl.textContent = "scenario: " + b.dataset.scn;
       fetch("/run", { method: "POST", headers: { "Content-Type": "application/json" },

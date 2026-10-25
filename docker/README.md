@@ -65,6 +65,13 @@ from the host. Then it builds and starts the two containers.
 Start one web page with three live panels: the agent, the proxy, and the host.
 Each panel streams in real time. Buttons start each scenario.
 
+A live diagram sits above the panels. It shows four nodes: the host, the agent,
+the proxy, and the internet. As the run proceeds, the nodes light up and packets
+move along the links. The direct link from the agent to the internet stays
+blocked. A step tracker below the diagram fills in: publish, prove isolation,
+escape to the document, escape to the key, decrypt, result. Click a node to
+flash its terminal panel.
+
 ```bash
 cd docker
 chmod +x dashboard.sh
