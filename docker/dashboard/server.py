@@ -67,6 +67,26 @@ class Hub:
 hub = Hub()
 
 
+def _stop_local_relay() -> None:
+    """Stop the background local-relay server(s) if publish_cli.py fell back
+    to one (every real paste host was unreachable). See
+    common/local_relay.py. The directory is PID-scoped
+    (.local_relay.<pid>), so this sweeps any that match, in case more than
+    one run has fallen back to it."""
+    import glob
+    import shutil
+    for relay_dir in glob.glob(os.path.join(DOCKER_DIR, ".local_relay.*")):
+        pid_file = os.path.join(relay_dir, ".pid")
+        if os.path.exists(pid_file):
+            try:
+                with open(pid_file, encoding="utf-8") as fh:
+                    pid = int(fh.read().strip())
+                os.kill(pid, 15)
+            except (OSError, ValueError):
+                pass
+        shutil.rmtree(relay_dir, ignore_errors=True)
+
+
 def run_scenario(name: str, message: str) -> None:
     if hub.running:
         hub.emit("host", "a run is already in progress; wait for it to finish.", "status")
@@ -130,6 +150,7 @@ def run_scenario(name: str, message: str) -> None:
     except Exception as e:  # noqa: BLE001
         hub.emit("host", f"error: {e}", "status")
     finally:
+        _stop_local_relay()
         hub.running = False
 
 

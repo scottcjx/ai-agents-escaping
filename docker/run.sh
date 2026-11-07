@@ -16,10 +16,20 @@ python3 publisher/publish_cli.py --out .env "$@"
 
 echo
 echo ">> Starting containers (agent has NO internet; proxy relays) ..."
-docker compose up --build --abort-on-container-exit --exit-code-from agent
-code=$?
+code=0
+docker compose up --build --abort-on-container-exit --exit-code-from agent || code=$?
 
 echo
 echo ">> Cleaning up containers ..."
 docker compose down >/dev/null 2>&1 || true
+
+# If publish_cli.py fell back to the local relay (every real paste host was
+# unreachable), stop that background server too. The directory is PID-scoped
+# (.local_relay.<pid>) so concurrent runs never share or clobber one.
+for d in .local_relay.*; do
+  [ -d "$d" ] || continue
+  [ -f "$d/.pid" ] && kill "$(cat "$d/.pid")" 2>/dev/null
+  rm -rf "$d"
+done
+
 exit $code

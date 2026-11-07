@@ -1,5 +1,6 @@
 # Generated each run by the publisher (holds live paste/GitLab URLs)
 docker/.env
+docker/.local_relay.*/
 
 # Python bytecode
 __pycache__/

@@ -6,7 +6,9 @@ only. The key is in the other location. This matches a realistic split.
 
 Backends:
   dryrun : two local files (offline, safe testing).
-  paste  : two separate paste.rs pastes (public internet).
+  paste  : two separate pastes, tried in order (paste.rs, dpaste.com,
+           0x0.st), with an automatic local-relay fallback (see
+           local_relay.py) if every one of them is unreachable.
   gitlab : two separate PUBLIC GitLab repositories, via the glab CLI.
 
 Each backend returns a pair: (document_url, key_url).
@@ -15,16 +17,23 @@ Each backend returns a pair: (document_url, key_url).
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import secrets
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 PASTE_ENDPOINT = "https://paste.rs"
+FALLBACK_ENDPOINT = "https://0x0.st"
 GITLAB_HOST = "https://gitlab.com"
+COMMON_DIR = pathlib.Path(__file__).resolve().parent
+# PID-scoped so two concurrent runs (e.g. run.sh + the dashboard) never
+# clobber each other's relay directory, .pid file, or background process.
+LOCAL_RELAY_DIR = COMMON_DIR.parent / f".local_relay.{os.getpid()}"
 
 # key_state values used across the backends.
 PUBLIC, PRIVATE, MISSING = "public", "private", "missing"
@@ -60,35 +69,135 @@ def publish_dryrun(document: str, key_blob: str, out_dir: str,
 
 
 # --------------------------------------------------------------------------- #
-# paste.rs backend                                                            #
+# paste.rs backend, with a 0x0.st fallback if paste.rs is down               #
 # --------------------------------------------------------------------------- #
-def _paste(text: str) -> str:
+def _paste_rs(text: str) -> str:
     req = urllib.request.Request(
         PASTE_ENDPOINT, data=text.encode("utf-8"), method="POST",
         headers={"Content-Type": "text/plain"},
     )
-    # paste.rs can reset the connection under repeated calls; retry briefly.
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read().decode("utf-8").strip()
+
+
+def _post_multipart(url: str, field: str, filename: str, data: bytes) -> str:
+    """Minimal single-field multipart/form-data POST (stdlib only)."""
+    boundary = secrets.token_hex(16)
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="{field}"; filename="{filename}"\r\n'
+        f"Content-Type: text/plain\r\n\r\n"
+    ).encode("utf-8") + data + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    req = urllib.request.Request(
+        url, data=body, method="POST",
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            # 0x0.st serves a plain-usage page to browser-like clients; a
+            # curl-style User-Agent keeps the API behaviour.
+            "User-Agent": "curl/8.7.1",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read().decode("utf-8").strip()
+
+
+def _dpaste_com(text: str) -> str:
+    """dpaste.com API v2: POST 'content', body/Location header is the item
+    URL; appending .txt gives the raw plain-text view."""
+    req = urllib.request.Request(
+        "https://dpaste.com/api/v2/",
+        data=urllib.parse.urlencode({"content": text}).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "sandbox-escape-demo/1.0 (comp-sec classroom)",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        url = resp.read().decode("utf-8").strip()
+    return url + ".txt"
+
+
+def _0x0_st(text: str) -> str:
+    return _post_multipart(FALLBACK_ENDPOINT, "file", "paste.txt", text.encode("utf-8"))
+
+
+def _paste(text: str) -> str:
+    # paste.rs can reset the connection, or (as of 2026-11) reject every
+    # non-empty body outright; retry briefly, then fall back to other hosts.
     last = None
     for _ in range(3):
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                return resp.read().decode("utf-8").strip()
+            return _paste_rs(text)
         except urllib.error.URLError as e:
             last = e
             time.sleep(1.5)
-    raise RuntimeError(f"paste.rs publish failed (transient): {last}")
+    errors = [f"paste.rs ({last})"]
+    for name, fn in (("dpaste.com", _dpaste_com), ("0x0.st", _0x0_st)):
+        try:
+            return fn(text)
+        except urllib.error.URLError as e:
+            errors.append(f"{name} ({e})")
+    raise RuntimeError("publish failed: " + "; ".join(errors))
+
+
+def _start_local_relay(timeout: float = 5.0) -> int:
+    """Start the local-relay server (common/local_relay.py) as a detached
+    background process serving LOCAL_RELAY_DIR, and return its bound port.
+
+    Used ONLY when paste.rs, dpaste.com and 0x0.st are all unreachable, so a
+    run never dies purely because a free third-party host is flaky. The
+    agent/proxy escape mechanics are unaffected -- see local_relay.py.
+    """
+    LOCAL_RELAY_DIR.mkdir(parents=True, exist_ok=True)
+    for stale in (".port", ".pid"):
+        (LOCAL_RELAY_DIR / stale).unlink(missing_ok=True)
+
+    subprocess.Popen(
+        [sys.executable, str(COMMON_DIR / "local_relay.py"),
+         "--dir", str(LOCAL_RELAY_DIR), "--port", "0"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    port_file = LOCAL_RELAY_DIR / ".port"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if port_file.exists():
+            return int(port_file.read_text(encoding="utf-8").strip())
+        time.sleep(0.1)
+    raise RuntimeError("local relay did not start in time")
+
+
+def publish_local_relay(document: str, key_blob: str,
+                        key_state: str = PUBLIC) -> tuple[str, str]:
+    port = _start_local_relay()
+    (LOCAL_RELAY_DIR / "document.json").write_text(document, encoding="utf-8")
+    key_path = LOCAL_RELAY_DIR / "key.txt"
+    key_path.unlink(missing_ok=True)
+    if key_state == PUBLIC:
+        key_path.write_text(key_blob, encoding="utf-8")
+    # host.docker.internal: Docker Desktop resolves this to the host for any
+    # container with outbound access -- the `proxy` container qualifies, the
+    # internal-only `agent` container does not.
+    base = f"http://host.docker.internal:{port}"
+    return f"{base}/document.json", f"{base}/key.txt"
 
 
 def publish_paste(document: str, key_blob: str,
                   key_state: str = PUBLIC) -> tuple[str, str]:
-    doc_url = _paste(document)
-    if key_state == PUBLIC:
-        return doc_url, _paste(key_blob)
-    # Private/missing: do not publish the key. Point at a non-existent paste so
-    # the fetch returns 404. (paste.rs has no private mode; GitLab shows the
-    # true private case.)
-    bogus = f"{PASTE_ENDPOINT}/{secrets.token_urlsafe(6)}"
-    return doc_url, bogus
+    try:
+        doc_url = _paste(document)
+        key_url = (_paste(key_blob) if key_state == PUBLIC
+                   # Private/missing: do not publish the key. Point at a
+                   # non-existent paste so the fetch returns 404. (paste.rs
+                   # has no private mode; GitLab shows the true private case.)
+                   else f"{PASTE_ENDPOINT}/{secrets.token_urlsafe(6)}")
+        return doc_url, key_url
+    except RuntimeError as e:
+        print(f">> all external paste hosts failed ({e}); "
+              f"falling back to a local relay", file=sys.stderr)
+        return publish_local_relay(document, key_blob, key_state)
 
 
 # --------------------------------------------------------------------------- #
