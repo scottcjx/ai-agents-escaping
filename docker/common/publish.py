@@ -6,9 +6,18 @@ only. The key is in the other location. This matches a realistic split.
 
 Backends:
   dryrun : two local files (offline, safe testing).
-  paste  : two separate pastes, tried in order (paste.rs, dpaste.com,
-           0x0.st), with an automatic local-relay fallback (see
-           local_relay.py) if every one of them is unreachable.
+  paste  : two separate pastes, tried in order (paste.rs, 0x0.st), with an
+           automatic local-relay fallback (see local_relay.py) if every one
+           of them is unreachable. dpaste.com is deliberately NOT in this
+           chain: its current cert chains to a Let's Encrypt root that macOS
+           and other live-updated OS trust stores already carry but the
+           proxy container's static ca-certificates bundle does not, so a
+           host-side publish can succeed while the containerized proxy's
+           fetch fails verification (502) even though nothing in the
+           sandbox-escape logic is broken. The publisher runs on the host,
+           the fetch runs in the container -- the two can have different
+           trusted roots, and a host-side reachability check cannot see
+           that in advance.
   gitlab : two separate PUBLIC GitLab repositories, via the glab CLI.
 
 Each backend returns a pair: (document_url, key_url).
@@ -133,7 +142,10 @@ def _paste(text: str) -> str:
             last = e
             time.sleep(1.5)
     errors = [f"paste.rs ({last})"]
-    for name, fn in (("dpaste.com", _dpaste_com), ("0x0.st", _0x0_st)):
+    # dpaste.com is intentionally excluded here -- see the module docstring:
+    # its current cert can verify fine from the host and still 502 in the
+    # proxy container, which looks like a broken egress path but isn't one.
+    for name, fn in (("0x0.st", _0x0_st),):
         try:
             return fn(text)
         except urllib.error.URLError as e:
