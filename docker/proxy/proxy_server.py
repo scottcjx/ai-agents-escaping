@@ -90,13 +90,39 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def startup_proof() -> None:
-    """Prove this container DOES have internet (the agent does not)."""
+    """Prove this container DOES have internet (the agent does not).
+
+    A single raw TCP connect to one IP:port can be blocked by a network's
+    own firewall/DPI even when the container has real, working egress (the
+    rest of the demo proves that every run by actually fetching documents
+    over HTTP/HTTPS). So this tries a short list of independent targets --
+    different IPs, different ports, and a real HTTPS request -- and reports
+    success if ANY of them gets through, instead of treating one blocked
+    target as "no internet".
+    """
     print("[proxy] PROOF -- this container HAS internet", flush=True)
-    try:
-        socket.create_connection((OUTSIDE_IP, 443), timeout=4).close()
-        print(f"  [ok] proxy reached {OUTSIDE_IP}:443 -- internet is available", flush=True)
-    except OSError as e:
-        print(f"  [!] proxy could not reach {OUTSIDE_IP}:443: {e}", flush=True)
+    targets = [
+        (OUTSIDE_IP, 443, "tcp"),
+        (OUTSIDE_IP, 80, "tcp"),
+        ("8.8.8.8", 443, "tcp"),
+        ("https://paste.rs", None, "https"),
+    ]
+    ok = False
+    last_err = None
+    for host, port, kind in targets:
+        try:
+            if kind == "https":
+                urllib.request.urlopen(host, timeout=4).close()
+                print(f"  [ok] proxy reached {host} -- internet is available", flush=True)
+            else:
+                socket.create_connection((host, port), timeout=4).close()
+                print(f"  [ok] proxy reached {host}:{port} -- internet is available", flush=True)
+            ok = True
+            break
+        except Exception as e:  # noqa: BLE001
+            last_err = f"{host} ({e})"
+    if not ok:
+        print(f"  [!] proxy could not reach any outside target: {last_err}", flush=True)
     try:
         p = subprocess.run(["ping", "-c", "1", "-W", "2", OUTSIDE_IP],
                            capture_output=True, text=True, timeout=6)
